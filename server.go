@@ -42,7 +42,7 @@ func NewServer(db *sql.DB, opts ...ServerOption) *Server {
 
 var ErrSkipRetry = errors.New("liteaq: skip retry")
 
-func (s *Server) executeTask(ctx context.Context, mux *ServeMux, job *JobDetails) error {
+func (s *Server) executeJob(ctx context.Context, mux *ServeMux, job *JobDetails) error {
 	fn, exists := mux.getHandler(job.Type)
 	if !exists {
 		return fmt.Errorf("no handler for job type %q", job.Type)
@@ -124,7 +124,7 @@ func (s *Server) Run(ctx context.Context, mux *ServeMux) {
 				log = slog.With("root_id", *job.RootId)
 			}
 
-			if jobErr := s.executeTask(jobCtx, mux, job); jobErr != nil {
+			if jobErr := s.executeJob(jobCtx, mux, job); jobErr != nil {
 				log.ErrorContext(jobCtx, "failed to execute job", "err", jobErr)
 
 				if errors.Is(jobErr, ErrSkipRetry) {

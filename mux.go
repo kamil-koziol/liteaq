@@ -14,7 +14,7 @@ func NewServeMux() *ServeMux {
 	}
 }
 
-type HandlerFunc func(ctx context.Context, task *JobDetails) error
+type HandlerFunc func(ctx context.Context, job *JobDetails) error
 
 func (m *ServeMux) registerHandleFunc(typ string, fn HandlerFunc) {
 	if _, exists := m.getHandler(typ); exists {
@@ -38,7 +38,7 @@ func (m *ServeMux) HandleFunc(typ string, fn HandlerFunc) {
 }
 
 type Handler interface {
-	ProcessTask(ctx context.Context, task *JobDetails) error
+	ProcessJob(ctx context.Context, task *JobDetails) error
 }
 
 func (m *ServeMux) Handle(typ string, handler Handler) {
@@ -46,5 +46,5 @@ func (m *ServeMux) Handle(typ string, handler Handler) {
 		panic("liteaq: nil handler")
 	}
 
-	m.registerHandleFunc(typ, handler.ProcessTask)
+	m.registerHandleFunc(typ, handler.ProcessJob)
 }

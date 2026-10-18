@@ -65,26 +65,26 @@ func TestAll(t *testing.T) {
 	mux := liteaq.NewServeMux()
 
 	recvChan := make(chan *liteaq.JobDetails)
-	mux.HandleFunc("email:welcome", func(ctx context.Context, task *liteaq.JobDetails) error {
-		recvChan <- task
+	mux.HandleFunc("email:welcome", func(ctx context.Context, job *liteaq.JobDetails) error {
+		recvChan <- job
 		return nil
 	})
 
 	startServer(t, server, mux)
 
-	task := liteaq.NewJob("email:welcome", []byte("Hello world!"))
-	_, err := client.Enqueue(t.Context(), task)
+	job := liteaq.NewJob("email:welcome", []byte("Hello world!"))
+	_, err := client.Enqueue(t.Context(), job)
 	if err != nil {
-		t.Fatalf("unable to enqueue task: %v", err)
+		t.Fatalf("unable to enqueue job: %v", err)
 	}
 
-	receivedTask := <-recvChan
-	if receivedTask.Type != task.Type {
-		t.Errorf("inavlid task type, expected: %s, got: %s", task.Type, receivedTask.Type)
+	receivedJob := <-recvChan
+	if receivedJob.Type != job.Type {
+		t.Errorf("inavlid job type, expected: %s, got: %s", job.Type, receivedJob.Type)
 	}
 
-	if !bytes.Equal(receivedTask.Payload, task.Payload) {
-		t.Errorf("inavlid task type, expected: %s, got: %s", task.Payload, receivedTask.Payload)
+	if !bytes.Equal(receivedJob.Payload, job.Payload) {
+		t.Errorf("inavlid job type, expected: %s, got: %s", job.Payload, receivedJob.Payload)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestEmptyQueueDoesNotCrash(t *testing.T) {
 	go server.Run(ctx, mux)
 }
 
-func TestMultipleTaskTypes(t *testing.T) {
+func TestMultipleJobTypes(t *testing.T) {
 	t.Parallel()
 
 	db := setupTestDB(t)
@@ -114,13 +114,13 @@ func TestMultipleTaskTypes(t *testing.T) {
 	emailCh := make(chan string, 1)
 	logCh := make(chan string, 1)
 
-	mux.HandleFunc("email", func(ctx context.Context, task *liteaq.JobDetails) error {
-		emailCh <- "email:" + string(task.Payload)
+	mux.HandleFunc("email", func(ctx context.Context, job *liteaq.JobDetails) error {
+		emailCh <- "email:" + string(job.Payload)
 		return nil
 	})
 
-	mux.HandleFunc("log", func(ctx context.Context, task *liteaq.JobDetails) error {
-		logCh <- "log:" + string(task.Payload)
+	mux.HandleFunc("log", func(ctx context.Context, job *liteaq.JobDetails) error {
+		logCh <- "log:" + string(job.Payload)
 		return nil
 	})
 
@@ -151,8 +151,8 @@ func TestConcurrentEnqueue(t *testing.T) {
 
 	recv := make(chan string, n)
 
-	mux.HandleFunc("task", func(ctx context.Context, task *liteaq.JobDetails) error {
-		recv <- string(task.Payload)
+	mux.HandleFunc("job", func(ctx context.Context, job *liteaq.JobDetails) error {
+		recv <- string(job.Payload)
 		return nil
 	})
 
@@ -164,7 +164,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 	errs := make(chan error, n)
 	for i := range n {
 		wg.Go(func() {
-			_, err := client.Enqueue(ctx, liteaq.NewJob("task", fmt.Appendf(nil, "%d", i)))
+			_, err := client.Enqueue(ctx, liteaq.NewJob("job", fmt.Appendf(nil, "%d", i)))
 			if err != nil {
 				errs <- fmt.Errorf("enqueue %d: %w", i, err)
 			}
@@ -184,11 +184,11 @@ func TestConcurrentEnqueue(t *testing.T) {
 		select {
 		case p := <-recv:
 			if seen[p] {
-				t.Fatalf("task %s delivered twice", p)
+				t.Fatalf("job %s delivered twice", p)
 			}
 			seen[p] = true
 		case <-time.After(5 * time.Second):
-			t.Fatalf("stalled: only got %d/%d tasks", len(seen), n)
+			t.Fatalf("stalled: only got %d/%d jobs", len(seen), n)
 		}
 	}
 }

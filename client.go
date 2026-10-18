@@ -5,7 +5,7 @@ import (
 	"database/sql"
 )
 
-// Client is responsible for putting tasks into the SQLite table.
+// Client is responsible for putting jobs into the SQLite table.
 type Client struct {
 	db      *sql.DB
 	querier *Querier
@@ -18,10 +18,10 @@ func NewClient(db *sql.DB) *Client {
 	}
 }
 
-func (c *Client) EnqueueTx(ctx context.Context, tx *sql.Tx, task *Job) (*JobDetails, error) {
-	return c.querier.Enqueue(ctx, tx, task)
+func (c *Client) EnqueueTx(ctx context.Context, tx *sql.Tx, job *Job) (*JobDetails, error) {
+	return c.querier.Enqueue(ctx, tx, job)
 }
 
-func (c *Client) Enqueue(ctx context.Context, task *Job) (*JobDetails, error) {
-	return c.querier.Enqueue(ctx, c.db, task)
+func (c *Client) Enqueue(ctx context.Context, job *Job) (*JobDetails, error) {
+	return c.querier.Enqueue(ctx, c.db, job)
 }

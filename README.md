@@ -9,7 +9,7 @@ It was inspired by the great [Asynq](https://github.com/hibiken/asynq) Redis-bac
 - **Transactional enqueueing** - enqueue inside your app transaction.
 - **Lives inside your SQLite database**
 - **Driver agnostic**: bring any `database/sql` SQLite driver (tested with [modernc.org/sqlite](https://modernc.org/sqlite) and [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)).
-- **At-least-once delivery**: failed tasks are retried up to `max_retries`.
+- **At-least-once delivery**: failed jobs are retried up to `max_retries`.
 
 
 ## Quickstart
@@ -46,12 +46,12 @@ func main() {
 	}
 	defer db.Close()
 
-	// Set up the `liteaq_tasks` table (safe to call on every start)
+	// Set up the `liteaq_jobs` table (safe to call on every start)
 	if err := liteaq.Setup(ctx, db); err != nil {
 		log.Fatal(err)
 	}
 
-	// Register task handlers
+	// Register job handlers
 	mux := liteaq.NewServeMux()
 	mux.HandleFunc("email:welcome", func(ctx context.Context, job *liteaq.JobDetails) error {
 		log.Printf("sending welcome email: %s", job.Payload)
