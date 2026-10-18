@@ -3,32 +3,85 @@ package liteaq
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
 
-// Server is responsible for pulling tasks out of SQLite and running them.
+// Server is responsible for pulling jobs out of SQLite and running them.
 type Server struct {
-	db      *sql.DB
-	querier *Querier
+	db         *sql.DB
+	querier    *Querier
+	retryDelay RetryDelayFunc
 }
 
-func NewServer(db *sql.DB) *Server {
-	return &Server{
-		db:      db,
-		querier: NewQuerier(),
+type ServerOption func(*Server)
+
+func WithRetryDelayFunc(fn RetryDelayFunc) ServerOption {
+	return func(s *Server) {
+		s.retryDelay = fn
 	}
 }
 
-func (s *Server) executeTask(ctx context.Context, mux *ServeMux, task *JobDetails) error {
-	fn, exists := mux.getHandler(task.Type)
+func NewServer(db *sql.DB, opts ...ServerOption) *Server {
+	srv := &Server{
+		db:         db,
+		querier:    NewQuerier(),
+		retryDelay: DefaultRetryDelay,
+	}
+
+	for _, opt := range opts {
+		opt(srv)
+	}
+
+	return srv
+}
+
+var ErrSkipRetry = errors.New("liteaq: skip retry")
+
+func (s *Server) executeTask(ctx context.Context, mux *ServeMux, job *JobDetails) error {
+	fn, exists := mux.getHandler(job.Type)
 	if !exists {
-		return fmt.Errorf("no handler for task type %q", task.Type)
+		return fmt.Errorf("no handler for job type %q", job.Type)
 	}
 
-	return fn(ctx, task)
+	return fn(ctx, job)
+}
+
+// RetryDelayFunc returns how long to wait before retrying a failed job.
+type RetryDelayFunc func(job *JobDetails, err error) time.Duration
+
+// DefaultRetryDelay is exponential backoff capped at 1h with 10% jitter
+func DefaultRetryDelay(job *JobDetails, _ error) time.Duration {
+	d := min(time.Second<<min(job.Retry, 20), time.Hour)
+	return d + rand.N(d/10+1)
+}
+
+func (s *Server) retry(ctx context.Context, job *JobDetails, reason error) (*JobDetails, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("start tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	newJob, err := s.querier.Retry(ctx, tx, job, s.retryDelay(job, reason))
+	if err != nil {
+		return nil, fmt.Errorf("retry job: %w", err)
+	}
+
+	// fail the previous one
+	if _, err := s.querier.Fail(ctx, tx, job.ID, reason.Error()); err != nil {
+		return nil, fmt.Errorf("fail job: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	return newJob, nil
 }
 
 func (s *Server) Run(ctx context.Context, mux *ServeMux) {
@@ -46,13 +99,13 @@ func (s *Server) Run(ctx context.Context, mux *ServeMux) {
 		case <-timer.C:
 		}
 
-		task, err := s.querier.Dequeue(ctx, s.db)
+		job, err := s.querier.Dequeue(ctx, s.db)
 		if err != nil {
 			timer.Reset(interval)
 			continue
 		}
 
-		if task == nil {
+		if job == nil {
 			timer.Reset(interval)
 			continue
 		}
@@ -60,16 +113,39 @@ func (s *Server) Run(ctx context.Context, mux *ServeMux) {
 		timer.Reset(0)
 
 		wg.Add(1)
-		go func(task *JobDetails) {
+		go func(job *JobDetails) {
 			defer wg.Done()
 
-			taskCtx, cancel := context.WithCancel(ctx)
+			jobCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			log := slog.With("task_id", task.ID)
+			log := slog.With("job_id", job.ID, "retry", job.Retry)
+			if job.RootId != nil {
+				log = slog.With("root_id", *job.RootId)
+			}
 
-			if err := s.executeTask(taskCtx, mux, task); err != nil {
-				log.ErrorContext(taskCtx, "failed to execute task", "err", err)
+			if jobErr := s.executeTask(jobCtx, mux, job); jobErr != nil {
+				log.ErrorContext(jobCtx, "failed to execute job", "err", jobErr)
+
+				if errors.Is(jobErr, ErrSkipRetry) {
+					log.ErrorContext(jobCtx, "skip retry", "err", jobErr)
+					return
+				}
+
+				finalRetry := job.Retry == job.MaxRetries
+				if finalRetry {
+					log.ErrorContext(jobCtx, "reached final retry", "max_retries", job.MaxRetries)
+					return
+				}
+
+				newJob, err := s.retry(ctx, job, jobErr)
+				if err != nil {
+					log.ErrorContext(jobCtx, "unable to retry job", "err", err)
+					return
+				}
+
+				log.InfoContext(jobCtx, "retried", "retried_id", newJob.ID, "execute_at", newJob.ExecuteAt)
+
 				return
 			}
 
@@ -80,9 +156,9 @@ func (s *Server) Run(ctx context.Context, mux *ServeMux) {
 			)
 			defer completeCancel()
 
-			if _, err := s.querier.Complete(completeCtx, s.db, task.ID); err != nil {
-				log.ErrorContext(completeCtx, "failed to complete the task", "err", err)
+			if _, err := s.querier.Complete(completeCtx, s.db, job.ID); err != nil {
+				log.ErrorContext(completeCtx, "failed to complete the job", "err", err)
 			}
-		}(task)
+		}(job)
 	}
 }
